@@ -2,10 +2,11 @@
 
 # Finder script for assignment 1
 # Author: Iyona Lynn Noronha
-# Ref: How to create bash script: https://www.datacamp.com/tutorial/how-to-write-bash-script-tutorial
-	   Runtime arguments processing: https://www.baeldung.com/linux/use-command-line-arguments-in-bash-script
-	   File countcommand: https://stackoverflow.com/questions/11307257/is-there-a-bash-command-which-counts-files
-	   Matching line count command: https://www.cyberciti.biz/faq/grep-count-lines-if-a-string-word-matches/
+# Ref:
+# How to create bash script: https://www.datacamp.com/tutorial/how-to-write-bash-script-tutorial
+# Runtime arguments processing:https://www.baeldung.com/linux/use-command-line-arguments-in-bash-script
+# File count command:https://stackoverflow.com/questions/11307257/is-there-a-bash-command-which-counts-files
+# Matching line count command: https://www.cyberciti.biz/faq/grep-count-lines-if-a-string-word-matches/
 	   
 	   
 #Input Error Conditions Handling
