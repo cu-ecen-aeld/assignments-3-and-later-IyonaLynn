@@ -11,19 +11,19 @@
 	   
 #Input Error Conditions Handling
 #Both runtime argument are reqd else error
-if [$# -ne 2]; then
+if [ $# -ne 2 ]; then
     echo "Error: Two arguments required"
 	echo "./finder.sh <filesdir> <searchstr>"
     exit 1
 #filesdir does not represent a directory on the filesystem
-elif [! -d "$1"]; then
+elif [ ! -d "$1" ]; then
 	echo "<filesdir> is not a directory on the filesystem"
 	exit 1
 fi
 
 # Accept the runtime arguments
-filesdir = $1
-searchstr = $2
+filesdir=$1
+searchstr=$2
 
 # number of files in the directory and all subdirectories
 file_count=$(find "$filesdir" -type f | wc -l)

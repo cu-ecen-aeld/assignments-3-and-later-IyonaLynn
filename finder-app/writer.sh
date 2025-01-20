@@ -10,15 +10,15 @@
 
 #Input Error Conditions Handling
 #Both runtime argument are reqd else error
-if [$# -ne 2]; then
+if [ $# -ne 2 ]; then
     echo "Error: Two arguments required"
 	echo "./writer.sh <writefile> <writestr>"
     exit 1
 fi
 
 # Accept the runtime arguments
-writefile = $1
-writestr  = $2
+writefile=$1
+writestr=$2
 
 #Extract file name and overwriting the string prompt given to chatgpt
 # Extract the directory path from the file path
