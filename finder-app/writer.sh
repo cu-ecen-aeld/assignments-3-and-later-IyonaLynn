@@ -5,8 +5,8 @@
 # Ref:
 # How to create bash script: https://www.datacamp.com/tutorial/how-to-write-bash-script-tutorial
 # Runtime arguments processing:https://www.baeldung.com/linux/use-command-line-arguments-in-bash-script
-# 
-# 
+# Extract directory path prompt given to chatgpt
+# Directory related:https://www.ibm.com/docs/en/aix/7.1?topic=directories-creating-mkdir-command
 
 #Input Error Conditions Handling
 #Both runtime argument are reqd else error
@@ -20,18 +20,19 @@ fi
 writefile=$1
 writestr=$2
 
-#Extract file name and overwriting the string prompt given to chatgpt
 # Extract the directory path from the file path
-dirpath=$(dirname "$writefile")
+writedir=$(dirname "$writefile")
 
-# Create the directory path if it does not exist
-mkdir -p "$dirpath"
+# Create directory only if it doesn't exists else error
+if [ ! -d "$writedir" ]; then
+    mkdir -p "$writedir"
+fi
 
 # Write the string to the file, overwriting if it already exists
 if echo "$writestr" > "$writefile"; then
-    echo "Successfully wrote to file: $writefile"
+    echo "Successfully wrote $writestr to file: $writefile"
 else
-    echo "Error: Could not create or write to file '$writefile'"
+    echo "Error: Writing to '$writefile' failed"
     exit 1
 fi
 
