@@ -23,4 +23,7 @@ void test_validate_my_username()
     //Compare and verify the 2 strings
     TEST_ASSERT_EQUAL_STRING_MESSAGE(my_saved_username, conf_username, "The saved username and username in conf file don't match");
 
+    //to be freed as per the malloc_username_from_conf_file instruction
+    free(conf_username);
+
 }
