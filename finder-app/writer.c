@@ -15,7 +15,7 @@
 * @resources
 * 1. Command Line Arguments: https://www.geeksforgeeks.org/command-line-arguments-in-c-cpp/
 * 2. Check directory is there or not: https://stackoverflow.com/questions/12510874/how-can-i-check-if-a-directory-exists
-*
+* 3. Chatgpt promt: Extract directory path and check if it exists
 */
 
 #include <stdio.h>
@@ -40,15 +40,22 @@ int main(int argc, char *argv[]) {
     const char *writefile = argv[1];
     const char *writestr = argv[2];
 	
-	// Check if directory exists
-    struct stat sb;
+    // Extract directory path
+    char *dir = strdup(writefile);
+    char *slash = strrchr(dir, '/'); // Find last '/'
 
-    if (!(stat(writefile, &sb) == 0 && S_ISDIR(sb.st_mode))) {
-        syslog(LOG_ERR, "File doesn't exist");
-	printf("Error: The file path doesn't exist\n");
-	return 1;
+    if (slash != NULL) {
+        *slash = '\0'; // Get directory path
+        struct stat sb;
+
+        if (stat(dir, &sb) != 0 || !S_ISDIR(sb.st_mode)) {
+            printf("Error: Directory does not exist: %s\n", dir);
+            free(dir);
+            return 1;
+        }
     }
-	
+    free(dir);
+
     // Write the string to the file, overwriting if it already exists
     FILE *fp = fopen(writefile, "w");
     if (fp == NULL) {
@@ -65,7 +72,7 @@ int main(int argc, char *argv[]) {
 
     // Log success message
     syslog(LOG_DEBUG, "Writing '%s' to '%s'", writestr, writefile);
-    printf("Writing '%s' to '%s'", writestr, writefile);
+    printf("Writing '%s' to '%s'\n", writestr, writefile);
 
     fclose(fp); // Close the file
     
