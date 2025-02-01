@@ -21,6 +21,14 @@
 
 //Include header files
 #include "systemcalls.h"
+#include <stdio.h>
+#include <stdlib.h>    // For system()
+#include <stdarg.h>
+#include <sys/types.h> // For pid_t
+#include <sys/wait.h>  // For waitpid(), WIFEXITED(), WEXITSTATUS()
+#include <unistd.h>    // For fork(), execv(), dup2(), close()
+#include <fcntl.h>     // For open(), O_WRONLY, O_CREAT, O_TRUNC
+#include <string.h>
 
 /**
  * @param cmd the command to execute with system()
