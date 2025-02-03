@@ -1,4 +1,5 @@
 #!/bin/bash
+
 # Script outline to install and build kernel.
 # Rev 1
 # 
@@ -11,6 +12,7 @@
 #
 # References:
 # Mainly the Week 2 Lecture for Building the Linux Kernel,How do we create a roofts, Creating Root Filesystem,Make the contents owned by root
+# Chatgpt to debug cp issues
 
 set -e
 set -u
@@ -55,15 +57,16 @@ if [ ! -e ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ]; then
     make -j4 ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} all
     
     #Build any kernel modules
-    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} modules
+    #make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} modules
     
     #Build the devicetree
     make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} dtbs
     
 fi
 
+
 echo "Adding the Image in outdir"
-cp ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ${OUTDIR}/
+cp -r ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ${OUTDIR}/Image
 
 echo "Creating the staging directory for the root filesystem"
 cd "$OUTDIR"
@@ -74,6 +77,7 @@ then
 fi
 
 # Create necessary base directories
+mkdir "${OUTDIR}/rootfs"
 
 mkdir -p ${OUTDIR}/rootfs/{bin,dev,etc,home,lib,lib64,proc,sbin,sys,tmp,usr,var}
 mkdir -p ${OUTDIR}/rootfs/usr/{bin,lib,sbin}
@@ -100,10 +104,10 @@ make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE}
 make CONFIG_PREFIX="${OUTDIR}/rootfs" ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} install
 
 echo "Library dependencies"
-${CROSS_COMPILE}readelf -a bin/busybox | grep "program interpreter"
-${CROSS_COMPILE}readelf -a bin/busybox | grep "Shared library"
+${CROSS_COMPILE}readelf -a ${OUTDIR}/rootfs/bin/busybox | grep "program interpreter"
+${CROSS_COMPILE}readelf -a ${OUTDIR}/rootfs/bin/busybox | grep "Shared library"
 
-# TODO: Add library dependencies to rootfs
+# Add library dependencies to rootfs
 TARGET_LIB_PATH=$(${CROSS_COMPILE}gcc --print-sysroot)
 sudo cp ${TARGET_LIB_PATH}/lib/ld-linux-aarch64.so.1 ${OUTDIR}/rootfs/lib
 sudo cp ${TARGET_LIB_PATH}/lib64/libc.so.6 ${OUTDIR}/rootfs/lib64
@@ -111,8 +115,13 @@ sudo cp ${TARGET_LIB_PATH}/lib64/libm.so.6 ${OUTDIR}/rootfs/lib64
 sudo cp ${TARGET_LIB_PATH}/lib64/libresolv.so.2 ${OUTDIR}/rootfs/lib64
 
 # Make device nodes
-sudo mknod -m 666 ${OUTDIR}/rootfs/dev/null c 1 3
-sudo mknod -m 600 ${OUTDIR}/rootfs/dev/console c 5 1
+cd ${OUTDIR}/rootfs
+
+#Added as suggested by Abhirath
+sudo rm -f /dev/null
+	
+sudo mknod -m 666 "/dev/null" c 1 3
+sudo mknod -m 600 "./dev/console" c 5 1
 
 # Clean and build the writer utility
 cd ${FINDER_APP_DIR}
@@ -123,18 +132,18 @@ make CROSS_COMPILE=${CROSS_COMPILE}
 # on the target rootfs
 mkdir -p ${OUTDIR}/rootfs/home
 mkdir -p ${OUTDIR}/rootfs/home/conf
-cp ${FINDER_APP_DIR}/autorun-qemu.sh ${OUTDIR}/rootfs/home/
-cp ${FINDER_APP_DIR}/writer ${OUTDIR}/rootfs/home/
-cp ${FINDER_APP_DIR}/finder.sh ${OUTDIR}/rootfs/home/
-cp ${FINDER_APP_DIR}/conf/username.txt ${OUTDIR}/rootfs/home/conf
-cp ${FINDER_APP_DIR}/conf/assignment.txt ${OUTDIR}/rootfs/home/conf
-cp ${FINDER_APP_DIR}/finder-test.sh ${OUTDIR}/rootfs/home/
+cp "${FINDER_APP_DIR}/autorun-qemu.sh" "${OUTDIR}/rootfs/home/"
+cp "${FINDER_APP_DIR}/writer" "${OUTDIR}/rootfs/home/"
+cp "${FINDER_APP_DIR}/finder.sh" "${OUTDIR}/rootfs/home/"
+cp -r "${FINDER_APP_DIR}/conf/" "${OUTDIR}/rootfs/home/"
+cp "${FINDER_APP_DIR}/finder-test.sh" "${OUTDIR}/rootfs/home/"
 
 # Chown the root directory
-cd ${OUTDIR}/rootfs
+cd "${OUTDIR}/rootfs"
 sudo chown -R root:root *
 
 # Create initramfs.cpio.gz
 find . | cpio -H newc -ov --owner root:root > ${OUTDIR}/initramfs.cpio
 cd ${OUTDIR}
 gzip -f initramfs.cpio
+
