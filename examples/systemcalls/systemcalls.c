@@ -1,4 +1,34 @@
+/***********************************************************************
+* @file  systemcalls.c
+* @version 1
+* @brief  Implementation of writer file
+*
+* @Modified by Iyona Lynn Noronha, iyonalynn.noronha@Colorado.edu
+*
+* @institution University of Colorado Boulder (UCB)
+* @course   ECEN 5713 - Advanced Embedded Software Development
+* @instructor Dan Walkes
+*
+* Revision history:
+*   0 Initial release
+*   1 Completed Todo
+*
+* @resources
+* 1. System(): https://man7.org/linux/man-pages/man3/system.3.html
+* 2. 
+* 3. 
+*/
+
+//Include header files
 #include "systemcalls.h"
+#include <stdio.h>
+#include <stdlib.h>    // For system()
+#include <stdarg.h>
+#include <sys/types.h> // For pid_t
+#include <sys/wait.h>  // For waitpid(), WIFEXITED(), WEXITSTATUS()
+#include <unistd.h>    // For fork(), execv(), dup2(), close()
+#include <fcntl.h>     // For open(), O_WRONLY, O_CREAT, O_TRUNC
+#include <string.h>
 
 /**
  * @param cmd the command to execute with system()
@@ -9,15 +39,20 @@
 */
 bool do_system(const char *cmd)
 {
+    bool ret = false;
 
-/*
- * TODO  add your code here
- *  Call the system() function with the command set in the cmd
- *   and return a boolean true if the system() call completed with success
- *   or false() if it returned a failure
-*/
+    if (!cmd) {
+        return false;
+    }
 
-    return true;
+    //Call the system() function with the command set in the cmd
+    int ret_system = system(cmd);
+
+    //Success cases
+    if(ret_system != -1 && WIFEXITED(ret_system) && WEXITSTATUS(ret_system) == 0)
+        ret = true;
+
+    return ret;
 }
 
 /**
@@ -37,31 +72,45 @@ bool do_system(const char *cmd)
 bool do_exec(int count, ...)
 {
     va_list args;
+
+    if (count < 1) {
+        return false;
+    }
+    
     va_start(args, count);
     char * command[count+1];
     int i;
     for(i=0; i<count; i++)
     {
         command[i] = va_arg(args, char *);
+        if (!command[i]) {
+            va_end(args);
+            return false;
+        }
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
-
-/*
- * TODO:
- *   Execute a system command by calling fork, execv(),
- *   and wait instead of system (see LSP page 161).
- *   Use the command[0] as the full path to the command to execute
- *   (first argument to execv), and use the remaining arguments
- *   as second argument to the execv() command.
- *
-*/
 
     va_end(args);
+    if (command[0][0] != '/') {
+        return false; // Ensure absolute path
+    }
+    
+    pid_t pid = fork();
+    if (pid == -1) {
+        return false; // Fork failed
+    }
+    else if (pid == 0) {
+        int ret_execv = execv(command[0], command);
+        if(ret_execv == -1)
+			return false; // Execv failed
+    }
 
-    return true;
+    int status;
+    if (waitpid(pid, &status, 0) == -1) {
+        return false;
+    }
+
+    return(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
 
 /**
@@ -71,6 +120,10 @@ bool do_exec(int count, ...)
 */
 bool do_exec_redirect(const char *outputfile, int count, ...)
 {
+    if (!outputfile || count < 1) {
+        return false;
+    }
+    
     va_list args;
     va_start(args, count);
     char * command[count+1];
@@ -78,12 +131,12 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
     for(i=0; i<count; i++)
     {
         command[i] = va_arg(args, char *);
+        if (!command[i]) {
+            va_end(args);
+            return false;
+        }
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
-
 
 /*
  * TODO
@@ -94,6 +147,30 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
 */
 
     va_end(args);
+    
+    if (command[0][0] != '/') {
+        return false; // Ensure absolute path
+    }
 
-    return true;
+    pid_t pid = fork();
+    if (pid == -1) {
+        return false;
+    }
+    else if (pid == 0) {
+        int fd = open(outputfile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd == -1) {
+            return false;
+        }
+        dup2(fd, STDOUT_FILENO);
+        close(fd);
+        execv(command[0], command);
+        return false;
+    }
+
+    int status;
+    if (waitpid(pid, &status, 0) == -1) {
+        return false;
+    }
+
+    return (WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
