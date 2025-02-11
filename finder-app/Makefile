@@ -9,6 +9,8 @@ CFLAGS = -Wall -Werror -g -O2       # Compiler flags for warnings and debugging
 OBJ = writer.o
 
 # Default target to build the writer application
+#Added in A4 because build.sh was expecting all target
+all: writer
 writer: $(OBJ)
 	$(CC) -o writer $(OBJ)
 
