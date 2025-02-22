@@ -1,5 +1,6 @@
 CROSS_COMPILE ?= aarch64-buildroot-linux-gnu-
-CC=$(CROSS_COMPILE)gccCFLAGS=-Wall -Werror -g
+CC=$(CROSS_COMPILE)gcc
+CFLAGS=-Wall -Werror -g
 TARGET=aesdsocket
 OUTPUT_DIR=.
 SRC=$(OUTPUT_DIR)/aesdsocket.c
