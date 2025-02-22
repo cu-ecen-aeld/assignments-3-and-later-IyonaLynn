@@ -1,4 +1,4 @@
-CROSS_COMPILE ?= aarch64-buildroot-linux-gnu-
+CROSS_COMPILE ?=
 CC=$(CROSS_COMPILE)gcc
 CFLAGS=-Wall -Werror -g
 TARGET=aesdsocket
@@ -13,3 +13,4 @@ $(TARGET): $(SRC)
 
 clean:
 	rm -f $(OUT)
+
