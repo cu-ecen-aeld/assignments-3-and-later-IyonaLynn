@@ -1,5 +1,5 @@
-CC=gcc
-CFLAGS=-Wall -Werror -g
+CROSS_COMPILE ?= aarch64-buildroot-linux-gnu-
+CC=$(CROSS_COMPILE)gccCFLAGS=-Wall -Werror -g
 TARGET=aesdsocket
 OUTPUT_DIR=.
 SRC=$(OUTPUT_DIR)/aesdsocket.c
@@ -12,4 +12,3 @@ $(TARGET): $(SRC)
 
 clean:
 	rm -f $(OUT)
-
