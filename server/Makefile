@@ -1,16 +1,16 @@
 CROSS_COMPILE ?=
-CC=$(CROSS_COMPILE)gcc
-CFLAGS=-Wall -Werror -g -pthread
+CC ?= $(CROSS_COMPILE)gcc
+CFLAGS ?= -Wall -Werror -g -pthread
+LDFLAGS ?= -lrt
+
 TARGET=aesdsocket
-OUTPUT_DIR=.
-SRC=$(OUTPUT_DIR)/aesdsocket.c
-OUT=$(OUTPUT_DIR)/$(TARGET)
+SRC=$(TARGET).c
+OUT=$(TARGET)
 
 all: $(TARGET)
 
 $(TARGET): $(SRC)
-	$(CC) $(CFLAGS) -o $(OUT) $(SRC) -lrt
+	$(CC) $(CFLAGS) -D_POSIX_C_SOURCE=200112L -o $(OUT) $(SRC) $(LDFLAGS)
 
 clean:
 	rm -f $(OUT) *.o
-
