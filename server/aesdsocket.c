@@ -1,6 +1,6 @@
 /***********************************************************************
 * @file  aesdsocket.c
-* @version 0
+* @version 1
 * @brief  Implementation of socket
 *
 * @author Iyona Lynn Noronha, iyonalynn.noronha@Colorado.edu
@@ -11,11 +11,13 @@
 *
 * Revision history:
 *   0 Initial release.
+*	1 A6 P1 Changes for handling multiple simultaneous connections
 *
 *Ref:
 * 1. Lecture Videos
 * 2. https://beej.us/guide/bgnet/html/
 * 3. Chatgpt: Prompt: Socket creation and listening
+* 4. 
 */
 
 #define _POSIX_C_SOURCE 200112L  // Enable POSIX features
@@ -34,6 +36,9 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <netdb.h>
+#include <pthread.h>
+#include <time.h>  // Needed for time functions
+#include "queue.h"
 
 #define PORT "9000"    // Port to listen on
 #define BACKLOG 10     // Max pending connections
@@ -41,9 +46,24 @@
 #define DATA_FILE "/var/tmp/aesdsocketdata"
 
 volatile sig_atomic_t stop_flag = 0;
+int sockfd = -1;  // Listening socket file descriptor
 
-int sockfd = -1;  // Socket file descriptor
-FILE *tmp_file = NULL;
+// Mutex to protect writes to DATA_FILE
+pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Define the thread node using SLIST macros from queue.h
+typedef struct thread_node {
+    pthread_t thread;                  // Thread handle
+    int client_fd;                     // Client socket file descriptor
+    SLIST_ENTRY(thread_node) entries;  // Linked list entry
+} thread_node_t;
+
+// Define and initialize the head of our singly linked list
+SLIST_HEAD(thread_list_head_s, thread_node);
+struct thread_list_head_s thread_list_head = SLIST_HEAD_INITIALIZER(thread_list_head);
+
+// Timer thread ID
+pthread_t timer_thread_id;
 
 // Function to handle cleanup on exit
 void cleanup() {
@@ -51,11 +71,7 @@ void cleanup() {
         close(sockfd);
         sockfd = -1;
     }
-    if (tmp_file != NULL) {
-        fclose(tmp_file);
-        tmp_file = NULL;
-        remove(DATA_FILE);
-    }
+    remove(DATA_FILE);
     closelog();
 }
 
@@ -150,6 +166,78 @@ int get_listener_socket(const char *port) {
     return sockfd;
 }
 
+// Thread function that handles an individual client connection
+void *connection_handler(void *arg) {
+    thread_node_t *node = (thread_node_t *)arg;
+    int client_fd = node->client_fd;
+    char buf[BUF_SIZE];
+    ssize_t bytes_received;
+
+    while ((bytes_received = recv(client_fd, buf, BUF_SIZE, 0)) > 0) {
+        pthread_mutex_lock(&file_mutex);  // LOCK before file operations
+        FILE *fp = fopen(DATA_FILE, "a+");
+        if (!fp) {
+            syslog(LOG_ERR, "Failed to open data file: %s", strerror(errno));
+            pthread_mutex_unlock(&file_mutex);// UNLOCK before file operations
+            break;
+        }
+
+        // Write received data to file
+        fwrite(buf, 1, bytes_received, fp);
+        fflush(fp);
+        fclose(fp);
+
+        // Read file and send back to client
+        fp = fopen(DATA_FILE, "r");
+        if (!fp) {
+            syslog(LOG_ERR, "Failed to open data file for reading: %s", strerror(errno));
+            pthread_mutex_unlock(&file_mutex);
+            break;
+        }
+
+        char send_buf[BUF_SIZE];
+        size_t n;
+        while ((n = fread(send_buf, 1, BUF_SIZE, fp)) > 0) {
+            if (send(client_fd, send_buf, n, 0) == -1) {
+                syslog(LOG_ERR, "Failed to send data to client: %s", strerror(errno));
+                break;
+            }
+        }
+
+        fclose(fp);
+        pthread_mutex_unlock(&file_mutex);
+    }
+    close(client_fd);
+    return NULL;
+}
+
+
+
+// Timer thread function that appends a timestamp every 10 seconds.
+void *timer_thread(void *arg) {
+    (void)arg;  // Unused parameter
+    while (!stop_flag) {
+        sleep(10);
+        time_t now = time(NULL);
+        struct tm *tm_info = localtime(&now);
+        char time_string[128];
+        strftime(time_string, sizeof(time_string), "timestamp:%a, %d %b %Y %H:%M:%S %z\n", tm_info);
+        
+        pthread_mutex_lock(&file_mutex);
+        FILE *fp = fopen(DATA_FILE, "a+");
+        if (fp) {
+            syslog(LOG_DEBUG, "Writing timestamp to file: %s", time_string);
+            fputs(time_string, fp);
+            fflush(fp);
+            fclose(fp);
+        } else {
+            syslog(LOG_ERR, "Failed to open data file for timestamp: %s", strerror(errno));
+        }
+        pthread_mutex_unlock(&file_mutex);
+    }
+    return NULL;
+}
+
 int main(int argc, char *argv[]) {
     bool is_daemon = false;
     if (argc == 2 && strcmp(argv[1], "-d") == 0) {
@@ -161,12 +249,15 @@ int main(int argc, char *argv[]) {
 
     // Set up signal handlers
     struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
     sa.sa_handler = signal_handler;
-    sa.sa_flags = 0;
     sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
+    FILE *fp = fopen(DATA_FILE, "w");
+    if (fp) fclose(fp);
     // Get a listening socket
     if ((sockfd = get_listener_socket(PORT)) == -1) {
         cleanup();
@@ -186,58 +277,42 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    // Open the data file
-    tmp_file = fopen(DATA_FILE, "a+");
-    if (tmp_file == NULL) {
-        syslog(LOG_ERR, "Failed to open data file");
+    // Create the timer thread in the parent process.
+    if (pthread_create(&timer_thread_id, NULL, timer_thread, NULL) != 0) {
+        syslog(LOG_ERR, "Failed to create timer thread: %s", strerror(errno));
         cleanup();
         exit(EXIT_FAILURE);
     }
 
-    // Main server loop
+    // Main server loop: accept connections until stop_flag is set
     while (!stop_flag) {
         struct sockaddr_in client_addr;
-        socklen_t addr_len = sizeof client_addr;
-        int new_fd;
+        socklen_t addr_len = sizeof(client_addr);
+        int new_fd = accept(sockfd, (struct sockaddr *)&client_addr, &addr_len);
 
-        // Accept a new connection
-        if ((new_fd = accept(sockfd, (struct sockaddr *)&client_addr, &addr_len)) == -1) {
+        if (new_fd == -1) {
+            if (errno == EINTR) continue;
             syslog(LOG_ERR, "Failed to accept connection: %s", strerror(errno));
             continue;
         }
 
-        // Log the client's IP address and port
-        char client_ip[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, sizeof client_ip);
-        int client_port = ntohs(client_addr.sin_port);
-        syslog(LOG_INFO, "Accepted connection from %s:%d", client_ip, client_port);
-
-        // Receive data from the client
-        char buf[BUF_SIZE];
-        ssize_t bytes_received;
-        while ((bytes_received = recv(new_fd, buf, BUF_SIZE - 1, 0)) > 0) {
-            buf[bytes_received] = '\0';
-            fputs(buf, tmp_file);
-            fflush(tmp_file);
-
-            // If a newline is found, send the file content back to the client
-            if (strchr(buf, '\n') != NULL) {
-                fseek(tmp_file, 0, SEEK_SET);
-                char send_buf[BUF_SIZE];
-                while (fgets(send_buf, BUF_SIZE, tmp_file) != NULL) {
-                    send(new_fd, send_buf, strlen(send_buf), 0);
-                }
-            }
+        // Allocate a new thread node and insert it into our SLIST.
+        thread_node_t *node = malloc(sizeof(thread_node_t));
+        if (!node) {
+            syslog(LOG_ERR, "Failed to allocate memory for thread node");
+            close(new_fd);
+            continue;
         }
-
-        // Log connection closure
-        syslog(LOG_INFO, "Closed connection from %s:%d", client_ip, client_port);
-
-        // Close the connection
-        close(new_fd);
+        node->client_fd = new_fd;
+        SLIST_INSERT_HEAD(&thread_list_head, node, entries);
+        pthread_create(&node->thread, NULL, connection_handler, node);
     }
+
+    // Stop accepting new connections.
+    close(sockfd);
 
     // Cleanup and exit
     cleanup();
     return 0;
 }
+
