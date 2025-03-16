@@ -249,7 +249,7 @@ void *connection_handler(void *arg) {
 
 // Timer thread function that appends a timestamp every 10 seconds.
 void *timer_thread(void *arg) {
-    (void)arg;  
+    (void)arg;
     struct timespec next_wakeup;
     clock_gettime(CLOCK_MONOTONIC, &next_wakeup);
 
@@ -257,11 +257,12 @@ void *timer_thread(void *arg) {
         next_wakeup.tv_sec += TIMESTAMP_INTERVAL;
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup, NULL);
 
+        #if (USE_AESD_CHAR_DEVICE == 0)  
         time_t now = time(NULL);
         struct tm *tm_info = localtime(&now);
         char time_string[128];
         strftime(time_string, sizeof(time_string), "timestamp:%a, %d %b %Y %H:%M:%S %z\n", tm_info);
-        
+
         pthread_mutex_lock(&file_mutex);
         FILE *fp = fopen(DATA_FILE, "a+");
         if (fp) {
@@ -273,6 +274,7 @@ void *timer_thread(void *arg) {
             syslog(LOG_ERR, "Failed to open data file for timestamp: %s", strerror(errno));
         }
         pthread_mutex_unlock(&file_mutex);
+        #endif
     }
     return NULL;
 }
