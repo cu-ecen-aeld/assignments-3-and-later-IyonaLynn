@@ -55,10 +55,17 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 	
 	    total_size += entry->size;
 	    index = (index + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
-	
-	    if (index == buffer->in_offs && !buffer->full) 
+
+	    // Stop if we’ve iterated through available entries in a non-full buffer
+	    if (index == buffer->in_offs && !buffer->full)  
 	    {
-	        break;  // Stop if we’ve iterated through available entries in a non-full buffer
+		break;
+	    }
+	    
+	    // Stop if we have checked all entries
+	    if (entries_checked == AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED - 1)  
+	    {
+	        break;
 	    }
 	}
 	
