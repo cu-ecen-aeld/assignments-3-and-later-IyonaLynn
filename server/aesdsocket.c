@@ -1,6 +1,6 @@
 /***********************************************************************
 * @file  aesdsocket.c
-* @version 1
+* @version 2
 * @brief  Implementation of socket
 *
 * @author Iyona Lynn Noronha, iyonalynn.noronha@Colorado.edu
@@ -12,12 +12,13 @@
 * Revision history:
 *   0 Initial release.
 *	1 A6 P1 Changes for handling multiple simultaneous connections
+*	2 A8 AESD char device support and previous assignment corrections
 *
 *Ref:
 * 1. Lecture Videos
 * 2. https://beej.us/guide/bgnet/html/
 * 3. Chatgpt: Prompt: Socket creation and listening
-* 4. 
+* 4. A8 instructions
 */
 
 #define _POSIX_C_SOURCE 200112L  // Enable POSIX features
@@ -43,7 +44,16 @@
 #define PORT "9000"    // Port to listen on
 #define BACKLOG 10     // Max pending connections
 #define BUF_SIZE 1024  // Buffer size for receiving data
-#define DATA_FILE "/var/tmp/aesdsocketdata"
+#define TIMESTAMP_INTERVAL 10  // Interval for timestamp updates
+
+/* Build switch for AESD char device */
+#define USE_AESD_CHAR_DEVICE 1
+
+#if (USE_AESD_CHAR_DEVICE == 1)
+    #define DATA_FILE "/dev/aesdchar"
+#else
+    #define DATA_FILE "/var/tmp/aesdsocketdata"
+#endif
 
 volatile sig_atomic_t stop_flag = 0;
 int sockfd = -1;  // Listening socket file descriptor
@@ -68,10 +78,13 @@ pthread_t timer_thread_id;
 // Function to handle cleanup on exit
 void cleanup() {
     if (sockfd != -1) {
+        shutdown(sockfd, SHUT_RDWR);  // Gracefully shutdown socket before closing
         close(sockfd);
         sockfd = -1;
     }
-    remove(DATA_FILE);
+    #if (USE_AESD_CHAR_DEVICE == 0)
+        remove(DATA_FILE);
+    #endif
     closelog();
 }
 
@@ -171,30 +184,44 @@ void *connection_handler(void *arg) {
     thread_node_t *node = (thread_node_t *)arg;
     int client_fd = node->client_fd;
     char buf[BUF_SIZE];
+	char message_buffer[BUF_SIZE];  // Buffer to store complete messages
     ssize_t bytes_received;
+	size_t message_length = 0;
 
-    while ((bytes_received = recv(client_fd, buf, BUF_SIZE, 0)) > 0) {
-        pthread_mutex_lock(&file_mutex);  // LOCK before file operations
-        FILE *fp = fopen(DATA_FILE, "a+");
-        if (!fp) {
-            syslog(LOG_ERR, "Failed to open data file: %s", strerror(errno));
-            pthread_mutex_unlock(&file_mutex);// UNLOCK before file operations
-            break;
+	while ((bytes_received = recv(client_fd, buf, BUF_SIZE, 0)) > 0) {
+	    pthread_mutex_lock(&file_mutex);  // Lock before file operations
+
+	    for (ssize_t i = 0; i < bytes_received; i++) {
+	   	    // Prevent buffer overflow
+		    if (message_length < BUF_SIZE - 1) {
+	            message_buffer[message_length++] = buf[i];
+            }
+            // Message complete, write to file
+	        if (buf[i] == '\n') {  // Message complete, write to file
+	            message_buffer[message_length] = '\0';
+
+	            FILE *fp = fopen(DATA_FILE, "a+");
+	            if (fp) {
+	                fputs(message_buffer, fp);  // Write only complete messages
+	                fclose(fp);
+	            } else {
+	                syslog(LOG_ERR, "Failed to open data file: %s", strerror(errno));
+	            }
+
+                // Shift remaining data to the start of the buffer (if any)
+                size_t remaining_length = bytes_received - i - 1;
+                memmove(message_buffer, &buf[i + 1], remaining_length);
+                message_length = remaining_length;  // Adjust length
+            }
         }
 
-        // Write received data to file
-        fwrite(buf, 1, bytes_received, fp);
-        fflush(fp);
-        fclose(fp);
+        pthread_mutex_unlock(&file_mutex);  // Unlock after file operations
+    }
 
-        // Read file and send back to client
-        fp = fopen(DATA_FILE, "r");
-        if (!fp) {
-            syslog(LOG_ERR, "Failed to open data file for reading: %s", strerror(errno));
-            pthread_mutex_unlock(&file_mutex);
-            break;
-        }
-
+    // Send the contents of the file back to the client
+    pthread_mutex_lock(&file_mutex);  // Lock before reading from file
+    FILE *fp = fopen(DATA_FILE, "r");
+    if (fp) {
         char send_buf[BUF_SIZE];
         size_t n;
         while ((n = fread(send_buf, 1, BUF_SIZE, fp)) > 0) {
@@ -203,26 +230,39 @@ void *connection_handler(void *arg) {
                 break;
             }
         }
-
         fclose(fp);
-        pthread_mutex_unlock(&file_mutex);
+    } else {
+        syslog(LOG_ERR, "Failed to open data file for reading: %s", strerror(errno));
     }
+    pthread_mutex_unlock(&file_mutex);  // Unlock after reading
+
+    if (bytes_received == 0) {
+        syslog(LOG_INFO, "Client disconnected");
+    } else if (bytes_received < 0) {
+        syslog(LOG_ERR, "recv() failed: %s", strerror(errno));
+    }
+
     close(client_fd);
     return NULL;
+
 }
-
-
 
 // Timer thread function that appends a timestamp every 10 seconds.
 void *timer_thread(void *arg) {
-    (void)arg;  // Unused parameter
+    (void)arg;
+    struct timespec next_wakeup;
+    clock_gettime(CLOCK_MONOTONIC, &next_wakeup);
+
     while (!stop_flag) {
-        sleep(10);
+        next_wakeup.tv_sec += TIMESTAMP_INTERVAL;
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup, NULL);
+
+        #if (USE_AESD_CHAR_DEVICE == 0)  
         time_t now = time(NULL);
         struct tm *tm_info = localtime(&now);
         char time_string[128];
         strftime(time_string, sizeof(time_string), "timestamp:%a, %d %b %Y %H:%M:%S %z\n", tm_info);
-        
+
         pthread_mutex_lock(&file_mutex);
         FILE *fp = fopen(DATA_FILE, "a+");
         if (fp) {
@@ -234,6 +274,7 @@ void *timer_thread(void *arg) {
             syslog(LOG_ERR, "Failed to open data file for timestamp: %s", strerror(errno));
         }
         pthread_mutex_unlock(&file_mutex);
+        #endif
     }
     return NULL;
 }
@@ -256,8 +297,11 @@ int main(int argc, char *argv[]) {
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
-    FILE *fp = fopen(DATA_FILE, "w");
-    if (fp) fclose(fp);
+    #if (USE_AESD_CHAR_DEVICE == 0)
+        FILE *fp = fopen(DATA_FILE, "w");
+        if (fp) fclose(fp);
+    #endif
+
     // Get a listening socket
     if ((sockfd = get_listener_socket(PORT)) == -1) {
         cleanup();
@@ -305,12 +349,32 @@ int main(int argc, char *argv[]) {
         }
         node->client_fd = new_fd;
         SLIST_INSERT_HEAD(&thread_list_head, node, entries);
-        pthread_create(&node->thread, NULL, connection_handler, node);
+
+        if (pthread_create(&node->thread, NULL, connection_handler, node) != 0) {
+            syslog(LOG_ERR, "Failed to create client thread: %s", strerror(errno));
+            close(new_fd);
+            free(node);
+            continue;
+        }
+
+        pthread_detach(node->thread); // Ensure thread cleans up after execution
     }
 
     // Stop accepting new connections.
     close(sockfd);
 
+    // Join timer thread before cleanup
+    if (pthread_join(timer_thread_id, NULL) != 0) {
+        syslog(LOG_ERR, "Failed to join timer thread: %s", strerror(errno));
+    }
+
+    // Join all client threads before exit
+    thread_node_t *node, *temp_node;
+    SLIST_FOREACH_SAFE(node, &thread_list_head, entries, temp_node) {
+        pthread_join(node->thread, NULL);  // Ensure all threads complete
+        SLIST_REMOVE(&thread_list_head, node, thread_node, entries);
+        free(node);
+    }
     // Cleanup and exit
     cleanup();
     return 0;

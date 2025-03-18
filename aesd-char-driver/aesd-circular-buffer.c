@@ -55,10 +55,17 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 	
 	    total_size += entry->size;
 	    index = (index + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
-	
-	    if (index == buffer->in_offs && !buffer->full) 
+
+	    // Stop if we’ve iterated through available entries in a non-full buffer
+	    if (index == buffer->in_offs && !buffer->full)  
 	    {
-	        break;  // Stop if we’ve iterated through available entries in a non-full buffer
+		break;
+	    }
+	    
+	    // Stop if we have checked all entries
+	    if (entries_checked == AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED - 1)  
+	    {
+	        break;
 	    }
 	}
 	
@@ -72,14 +79,17 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 * Any necessary locking must be handled by the caller
 * Any memory referenced in @param add_entry must be allocated by and/or must have a lifetime managed by the caller.
 */
-void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
+const char* aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
 {
     if ((buffer == NULL) || (add_entry == NULL))
     {
-        return;
+        return NULL;
     }
 
+    const char *old_buffer = NULL;
+
     if (buffer->full) {
+        old_buffer = buffer->entry[buffer->out_offs].buffptr;  // Save old entry for freeing
         // Buffer is full, overwrite the oldest entry
         buffer->out_offs = (buffer->out_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
     }
@@ -92,6 +102,8 @@ void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const s
 
     // If the buffer is now full, update the flag
     buffer->full = (buffer->in_offs == buffer->out_offs);
+
+    return old_buffer;
 }
 
 /**
