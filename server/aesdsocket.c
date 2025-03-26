@@ -1,6 +1,6 @@
 /***********************************************************************
 * @file  aesdsocket.c
-* @version 2
+* @version 3
 * @brief  Implementation of socket
 *
 * @author Iyona Lynn Noronha, iyonalynn.noronha@Colorado.edu
@@ -13,6 +13,7 @@
 *   0 Initial release.
 *	1 A6 P1 Changes for handling multiple simultaneous connections
 *	2 A8 AESD char device support and previous assignment corrections
+*	3 A9 Advanced Char Driver Operations
 *
 *Ref:
 * 1. Lecture Videos
@@ -40,6 +41,9 @@
 #include <pthread.h>
 #include <time.h>  // Needed for time functions
 #include "queue.h"
+#include "../aesd-char-driver/aesd_ioctl.h"
+#include <linux/ioctl.h>
+#include "aesd_ioctl.h"
 
 #define PORT "9000"    // Port to listen on
 #define BACKLOG 10     // Max pending connections
@@ -200,6 +204,30 @@ void *connection_handler(void *arg) {
 	        if (buf[i] == '\n') {  // Message complete, write to file
 	            message_buffer[message_length] = '\0';
 
+#if USE_AESD_CHAR_DEVICE
+		    // Check for IOCTL command before writing
+		    if (strncmp(message_buffer, "AESDCHAR_IOCSEEKTO:", 20) == 0) {
+		        int x, y;
+		        if (sscanf(message_buffer, "AESDCHAR_IOCSEEKTO:%d,%d", &x, &y) == 2) {
+		            struct aesd_seekto seekto = {
+		                .write_cmd = x,
+		                .write_cmd_offset = y
+		            };
+		
+		            int fd = open(DATA_FILE, O_RDWR);
+		            if (fd < 0) {
+		                syslog(LOG_ERR, "Failed to open aesdchar for ioctl: %s", strerror(errno));
+		            } else {
+		                if (ioctl(fd, AESDCHAR_IOCSEEKTO, &seekto) == -1) {
+		                    syslog(LOG_ERR, "IOCTL AESDCHAR_IOCSEEKTO failed: %s", strerror(errno));
+		                }
+		                close(fd);
+		            }
+		        }
+		    } else
+#endif
+    		{
+    			// Normal write to device/file
 	            FILE *fp = fopen(DATA_FILE, "a+");
 	            if (fp) {
 	                fputs(message_buffer, fp);  // Write only complete messages
@@ -207,11 +235,12 @@ void *connection_handler(void *arg) {
 	            } else {
 	                syslog(LOG_ERR, "Failed to open data file: %s", strerror(errno));
 	            }
+	        }    
 
-                // Shift remaining data to the start of the buffer (if any)
-                size_t remaining_length = bytes_received - i - 1;
-                memmove(message_buffer, &buf[i + 1], remaining_length);
-                message_length = remaining_length;  // Adjust length
+            // Shift remaining data to the start of the buffer (if any)
+            size_t remaining_length = bytes_received - i - 1;
+            memmove(message_buffer, &buf[i + 1], remaining_length);
+            message_length = remaining_length;  // Adjust length
             }
         }
 
