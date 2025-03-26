@@ -247,7 +247,7 @@ struct file_operations aesd_fops = {
     .write =    aesd_write,
     .open =     aesd_open,
     .release =  aesd_release,
-    ..llseek = 	aesd_llseek,
+    .llseek = 	aesd_llseek,
     .unlocked_ioctl = aesd_ioctl,
 };
 
