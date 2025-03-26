@@ -43,7 +43,6 @@
 #include "queue.h"
 #include "../aesd-char-driver/aesd_ioctl.h"
 #include <linux/ioctl.h>
-#include "aesd_ioctl.h"
 
 #define PORT "9000"    // Port to listen on
 #define BACKLOG 10     // Max pending connections
@@ -286,7 +285,7 @@ void *timer_thread(void *arg) {
         next_wakeup.tv_sec += TIMESTAMP_INTERVAL;
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup, NULL);
 
-        #if (USE_AESD_CHAR_DEVICE == 0)  
+        #if (USE_AESD_CHAR_DEVICE == 0)
         time_t now = time(NULL);
         struct tm *tm_info = localtime(&now);
         char time_string[128];
