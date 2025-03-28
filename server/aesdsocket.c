@@ -231,40 +231,38 @@ void *connection_handler(void *arg) {
                         syslog(LOG_ERR, "Malformed AESDCHAR_IOCSEEKTO command");
                     }
                 } else {
-                    // Normal write to data file
+                    // Normal write + read flow (merged logic)
                     pthread_mutex_lock(&file_mutex);
-                    FILE *fp = fopen(DATA_FILE, "a+");
-                    if (fp) {
-                        fputs(message_buffer, fp);
-                        fclose(fp);
+                    int fd = open(DATA_FILE, O_RDWR | O_APPEND);
+                    if (fd >= 0) {
+                        if (write(fd, message_buffer, message_length) == -1) {
+                            syslog(LOG_ERR, "Write failed: %s", strerror(errno));
+                        }
+
+                        // Rewind to start of file
+                        if (lseek(fd, 0, SEEK_SET) == -1) {
+                            syslog(LOG_ERR, "lseek failed: %s", strerror(errno));
+                        }
+
+                        char send_buf[BUF_SIZE];
+                        ssize_t bytes_read;
+                        while ((bytes_read = read(fd, send_buf, BUF_SIZE)) > 0) {
+                            if (send(client_fd, send_buf, bytes_read, 0) == -1) {
+                                syslog(LOG_ERR, "Send failed: %s", strerror(errno));
+                                break;
+                            }
+                        }
+                        close(fd);
                     } else {
                         syslog(LOG_ERR, "Failed to open data file: %s", strerror(errno));
                     }
                     pthread_mutex_unlock(&file_mutex);
                 }
 
-                message_length = 0;  // Reset buffer for next message
+                message_length = 0;  // Reset for next message
             }
         }
     }
-
-    // Send the contents of the file back to the client
-    pthread_mutex_lock(&file_mutex);  // Lock before reading from file
-    FILE *fp = fopen(DATA_FILE, "r");
-    if (fp) {
-        char send_buf[BUF_SIZE];
-        size_t n;
-        while ((n = fread(send_buf, 1, BUF_SIZE, fp)) > 0) {
-            if (send(client_fd, send_buf, n, 0) == -1) {
-                syslog(LOG_ERR, "Failed to send data to client: %s", strerror(errno));
-                break;
-            }
-        }
-        fclose(fp);
-    } else {
-        syslog(LOG_ERR, "Failed to open data file for reading: %s", strerror(errno));
-    }
-    pthread_mutex_unlock(&file_mutex);  // Unlock after reading
 
     if (bytes_received == 0) {
         syslog(LOG_INFO, "Client disconnected");
