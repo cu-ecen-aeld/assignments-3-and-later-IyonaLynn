@@ -1,6 +1,6 @@
 /***********************************************************************
 * @file  aesdsocket.c
-* @version 3
+* @version 2
 * @brief  Implementation of socket
 *
 * @author Iyona Lynn Noronha, iyonalynn.noronha@Colorado.edu
@@ -13,7 +13,6 @@
 *   0 Initial release.
 *	1 A6 P1 Changes for handling multiple simultaneous connections
 *	2 A8 AESD char device support and previous assignment corrections
-*	3 A9 Advanced Char Driver Operations
 *
 *Ref:
 * 1. Lecture Videos
@@ -41,8 +40,8 @@
 #include <pthread.h>
 #include <time.h>  // Needed for time functions
 #include "queue.h"
+#include <sys/ioctl.h>
 #include "../aesd-char-driver/aesd_ioctl.h"
-#include <linux/ioctl.h>
 
 #define PORT "9000"    // Port to listen on
 #define BACKLOG 10     // Max pending connections
@@ -51,6 +50,8 @@
 
 /* Build switch for AESD char device */
 #define USE_AESD_CHAR_DEVICE 1
+
+#define IOCTL_CMD_PREFIX "AESDCHAR_IOCSEEKTO:"
 
 #if (USE_AESD_CHAR_DEVICE == 1)
     #define DATA_FILE "/dev/aesdchar"
@@ -192,58 +193,59 @@ void *connection_handler(void *arg) {
 	size_t message_length = 0;
 
 	while ((bytes_received = recv(client_fd, buf, BUF_SIZE, 0)) > 0) {
-	    pthread_mutex_lock(&file_mutex);  // Lock before file operations
-
 	    for (ssize_t i = 0; i < bytes_received; i++) {
 	   	    // Prevent buffer overflow
 		    if (message_length < BUF_SIZE - 1) {
 	            message_buffer[message_length++] = buf[i];
             }
-            // Message complete, write to file
-	        if (buf[i] == '\n') {  // Message complete, write to file
-	            message_buffer[message_length] = '\0';
+			// Message complete, write to file
+            if (buf[i] == '\n') {
+                message_buffer[message_length] = '\0';  // Null-terminate message
 
-#if USE_AESD_CHAR_DEVICE
-		    // Check for IOCTL command before writing
-		    if (strncmp(message_buffer, "AESDCHAR_IOCSEEKTO:", 20) == 0) {
-		        int x, y;
-		        if (sscanf(message_buffer, "AESDCHAR_IOCSEEKTO:%d,%d", &x, &y) == 2) {
-		            struct aesd_seekto seekto = {
-		                .write_cmd = x,
-		                .write_cmd_offset = y
-		            };
-		
-		            int fd = open(DATA_FILE, O_RDWR);
-		            if (fd < 0) {
-		                syslog(LOG_ERR, "Failed to open aesdchar for ioctl: %s", strerror(errno));
-		            } else {
-		                if (ioctl(fd, AESDCHAR_IOCSEEKTO, &seekto) == -1) {
-		                    syslog(LOG_ERR, "IOCTL AESDCHAR_IOCSEEKTO failed: %s", strerror(errno));
-		                }
-		                close(fd);
-		            }
-		        }
-		    } else
-#endif
-    		{
-    			// Normal write to device/file
-	            FILE *fp = fopen(DATA_FILE, "a+");
-	            if (fp) {
-	                fputs(message_buffer, fp);  // Write only complete messages
-	                fclose(fp);
-	            } else {
-	                syslog(LOG_ERR, "Failed to open data file: %s", strerror(errno));
-	            }
-	        }    
+                // Handle AESDCHAR_IOCSEEKTO:X,Y ioctl command (custom seek)
+                if (strncmp(message_buffer, IOCTL_CMD_PREFIX, strlen(IOCTL_CMD_PREFIX)) == 0) {
+                    unsigned int x, y;
+                    if (sscanf(message_buffer + strlen(IOCTL_CMD_PREFIX), "%u,%u", &x, &y) == 2) {
+                        struct aesd_seekto seekto = {
+                            .write_cmd = x,
+                            .write_cmd_offset = y
+                        };
 
-            // Shift remaining data to the start of the buffer (if any)
-            size_t remaining_length = bytes_received - i - 1;
-            memmove(message_buffer, &buf[i + 1], remaining_length);
-            message_length = remaining_length;  // Adjust length
+                        int fd = open(DATA_FILE, O_RDWR);
+                        if (fd >= 0) {
+                            if (ioctl(fd, AESDCHAR_IOCSEEKTO, &seekto) == -1) {
+                                syslog(LOG_ERR, "ioctl failed: %s", strerror(errno));
+                            } else {
+                                // Send data after seek using same FD
+                                char send_buf[BUF_SIZE];
+                                ssize_t bytes_read;
+                                while ((bytes_read = read(fd, send_buf, BUF_SIZE)) > 0) {
+                                    send(client_fd, send_buf, bytes_read, 0);
+                                }
+                            }
+                            close(fd);
+                        } else {
+                            syslog(LOG_ERR, "Failed to open data file for ioctl: %s", strerror(errno));
+                        }
+                    } else {
+                        syslog(LOG_ERR, "Malformed AESDCHAR_IOCSEEKTO command");
+                    }
+                } else {
+                    // Normal write to data file
+                    pthread_mutex_lock(&file_mutex);
+                    FILE *fp = fopen(DATA_FILE, "a+");
+                    if (fp) {
+                        fputs(message_buffer, fp);
+                        fclose(fp);
+                    } else {
+                        syslog(LOG_ERR, "Failed to open data file: %s", strerror(errno));
+                    }
+                    pthread_mutex_unlock(&file_mutex);
+                }
+
+                message_length = 0;  // Reset buffer for next message
             }
         }
-
-        pthread_mutex_unlock(&file_mutex);  // Unlock after file operations
     }
 
     // Send the contents of the file back to the client
@@ -272,7 +274,6 @@ void *connection_handler(void *arg) {
 
     close(client_fd);
     return NULL;
-
 }
 
 // Timer thread function that appends a timestamp every 10 seconds.
@@ -285,7 +286,7 @@ void *timer_thread(void *arg) {
         next_wakeup.tv_sec += TIMESTAMP_INTERVAL;
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup, NULL);
 
-        #if (USE_AESD_CHAR_DEVICE == 0)
+        #if (USE_AESD_CHAR_DEVICE == 0)  
         time_t now = time(NULL);
         struct tm *tm_info = localtime(&now);
         char time_string[128];
