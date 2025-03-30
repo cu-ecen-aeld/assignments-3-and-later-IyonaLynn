@@ -199,68 +199,69 @@ void *connection_handler(void *arg) {
 	            message_buffer[message_length++] = buf[i];
             }
 			// Message complete, write to file
-            if (buf[i] == '\n') {
-                message_buffer[message_length] = '\0';  // Null-terminate message
+			if (buf[i] == '\n') {
+				// Make sure the newline is included in the message length
+				message_buffer[message_length++] = '\n';
+				message_buffer[message_length] = '\0';  // Null-terminate for logging/debug (optional)
 
-                // Handle AESDCHAR_IOCSEEKTO:X,Y ioctl command (custom seek)
-                if (strncmp(message_buffer, IOCTL_CMD_PREFIX, strlen(IOCTL_CMD_PREFIX)) == 0) {
-                    unsigned int x, y;
-                    if (sscanf(message_buffer + strlen(IOCTL_CMD_PREFIX), "%u,%u", &x, &y) == 2) {
-                        struct aesd_seekto seekto = {
-                            .write_cmd = x,
-                            .write_cmd_offset = y
-                        };
+				// Check for IOCTL command
+				if (strncmp(message_buffer, IOCTL_CMD_PREFIX, strlen(IOCTL_CMD_PREFIX)) == 0) {
+					unsigned int x, y;
+					if (sscanf(message_buffer + strlen(IOCTL_CMD_PREFIX), "%u,%u", &x, &y) == 2) {
+						struct aesd_seekto seekto = {
+							.write_cmd = x,
+							.write_cmd_offset = y
+						};
 
-                        int fd = open(DATA_FILE, O_RDWR);
-                        if (fd >= 0) {
-                            if (ioctl(fd, AESDCHAR_IOCSEEKTO, &seekto) == -1) {
-                                syslog(LOG_ERR, "ioctl failed: %s", strerror(errno));
-                            } else {
-                                // Send data after seek using same FD
-                                char send_buf[BUF_SIZE];
-                                ssize_t bytes_read;
-                                while ((bytes_read = read(fd, send_buf, BUF_SIZE)) > 0) {
-                                    send(client_fd, send_buf, bytes_read, 0);
-                                }
-                            }
-                            close(fd);
-                        } else {
-                            syslog(LOG_ERR, "Failed to open data file for ioctl: %s", strerror(errno));
-                        }
-                    } else {
-                        syslog(LOG_ERR, "Malformed AESDCHAR_IOCSEEKTO command");
-                    }
-                } else {
-                    // Normal write + read flow (merged logic)
-                    pthread_mutex_lock(&file_mutex);
-                    int fd = open(DATA_FILE, O_RDWR | O_APPEND);
-                    if (fd >= 0) {
-                        if (write(fd, message_buffer, message_length) == -1) {
-                            syslog(LOG_ERR, "Write failed: %s", strerror(errno));
-                        }
+						int fd = open(DATA_FILE, O_RDWR);
+						if (fd >= 0) {
+							if (ioctl(fd, AESDCHAR_IOCSEEKTO, &seekto) == -1) {
+								syslog(LOG_ERR, "ioctl failed: %s", strerror(errno));
+							} else {
+								// Send response after seeking
+								char send_buf[BUF_SIZE];
+								ssize_t bytes_read;
+								while ((bytes_read = read(fd, send_buf, BUF_SIZE)) > 0) {
+									send(client_fd, send_buf, bytes_read, 0);
+								}
+							}
+							close(fd);
+						} else {
+							syslog(LOG_ERR, "Failed to open data file for ioctl: %s", strerror(errno));
+						}
+					} else {
+						syslog(LOG_ERR, "Malformed AESDCHAR_IOCSEEKTO command");
+					}
+				} else {
+					pthread_mutex_lock(&file_mutex);
+					int fd = open(DATA_FILE, O_RDWR | O_APPEND);
+					if (fd >= 0) {
+						// message_length includes the '\n'
+						if (write(fd, message_buffer, message_length) == -1) {
+							syslog(LOG_ERR, "Write failed: %s", strerror(errno));
+						}
 
-                        // Rewind to start of file
-                        if (lseek(fd, 0, SEEK_SET) == -1) {
-                            syslog(LOG_ERR, "lseek failed: %s", strerror(errno));
-                        }
+						if (lseek(fd, 0, SEEK_SET) == -1) {
+							syslog(LOG_ERR, "lseek failed: %s", strerror(errno));
+						}
 
-                        char send_buf[BUF_SIZE];
-                        ssize_t bytes_read;
-                        while ((bytes_read = read(fd, send_buf, BUF_SIZE)) > 0) {
-                            if (send(client_fd, send_buf, bytes_read, 0) == -1) {
-                                syslog(LOG_ERR, "Send failed: %s", strerror(errno));
-                                break;
-                            }
-                        }
-                        close(fd);
-                    } else {
-                        syslog(LOG_ERR, "Failed to open data file: %s", strerror(errno));
-                    }
-                    pthread_mutex_unlock(&file_mutex);
-                }
+						char send_buf[BUF_SIZE];
+						ssize_t bytes_read;
+						while ((bytes_read = read(fd, send_buf, BUF_SIZE)) > 0) {
+							if (send(client_fd, send_buf, bytes_read, 0) == -1) {
+								syslog(LOG_ERR, "Send failed: %s", strerror(errno));
+								break;
+							}
+						}
+						close(fd);
+					} else {
+						syslog(LOG_ERR, "Failed to open data file: %s", strerror(errno));
+					}
+					pthread_mutex_unlock(&file_mutex);
+				}
 
-                message_length = 0;  // Reset for next message
-            }
+				message_length = 0;  // Reset buffer for next message
+			}
         }
     }
 
