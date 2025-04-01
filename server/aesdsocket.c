@@ -224,7 +224,14 @@ void *connection_handler(void *arg) {
 								char send_buf[BUF_SIZE];
 								ssize_t bytes_read;
 								while ((bytes_read = read(fd, send_buf, BUF_SIZE)) > 0) {
-									send(client_fd, send_buf, bytes_read, 0);
+								    // Trim trailing newline if it exists
+								    if (bytes_read > 0 && send_buf[bytes_read - 1] == '\n') {
+									bytes_read--;
+								    }
+								    if (send(client_fd, send_buf, bytes_read, 0) == -1) {
+									syslog(LOG_ERR, "Send failed (IOCTL response): %s", strerror(errno));
+									break;
+								    }
 								}
 							}
 							close(fd);
@@ -250,10 +257,14 @@ void *connection_handler(void *arg) {
 						char send_buf[BUF_SIZE];
 						ssize_t bytes_read;
 						while ((bytes_read = read(fd, send_buf, BUF_SIZE)) > 0) {
-							if (send(client_fd, send_buf, bytes_read, 0) == -1) {
-								syslog(LOG_ERR, "Send failed: %s", strerror(errno));
-								break;
-							}
+						    // Trim trailing newline if present
+						    if (bytes_read > 0 && send_buf[bytes_read - 1] == '\n') {
+							bytes_read--;
+						    }
+						    if (send(client_fd, send_buf, bytes_read, 0) == -1) {
+							syslog(LOG_ERR, "Send failed: %s", strerror(errno));
+							break;
+						    }
 						}
 						close(fd);
 					} else {
