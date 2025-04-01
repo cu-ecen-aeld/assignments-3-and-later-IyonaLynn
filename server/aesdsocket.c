@@ -228,9 +228,6 @@ void *connection_handler(void *arg) {
 									if (bytes_read == 1 && send_buf[0] == '\n') {
 									    continue; // Skip sending single newline buffer
 									}
-									if (bytes_read > 0 && send_buf[bytes_read - 1] == '\n') {
-									    bytes_read--; // Trim trailing newline for clean diff match
-									}
 									if (bytes_read == 0) {
 									    continue; // Avoid sending empty buffer
 									}
@@ -266,9 +263,6 @@ void *connection_handler(void *arg) {
 						    // Trim trailing newline if present
 							if (bytes_read == 1 && send_buf[0] == '\n') {
 							    continue; // Skip sending single newline buffer
-							}
-							if (bytes_read > 0 && send_buf[bytes_read - 1] == '\n') {
-							    bytes_read--; // Trim trailing newline for clean diff match
 							}
 							if (bytes_read == 0) {
 							    continue; // Avoid sending empty buffer
