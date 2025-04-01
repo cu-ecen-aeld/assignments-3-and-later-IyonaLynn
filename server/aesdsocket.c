@@ -92,11 +92,11 @@ void cleanup() {
     closelog();
 }
 
-// Signal handler for SIGINT and SIGTERM
 void signal_handler(int signal) {
     if (signal == SIGINT || signal == SIGTERM) {
         stop_flag = 1;
         syslog(LOG_INFO, "Caught signal, exiting");
+        shutdown(sockfd, SHUT_RDWR); // Force unblock accept
     }
 }
 
@@ -298,7 +298,16 @@ void *timer_thread(void *arg) {
 
     while (!stop_flag) {
         next_wakeup.tv_sec += TIMESTAMP_INTERVAL;
-        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup, NULL);
+
+        int rc = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup, NULL);
+        if (rc != 0 && rc != EINTR) {
+            syslog(LOG_ERR, "clock_nanosleep error: %s", strerror(rc));
+            break;
+        }
+
+        if (stop_flag) {
+            break;
+        }
 
         #if (USE_AESD_CHAR_DEVICE == 0)  
         time_t now = time(NULL);
