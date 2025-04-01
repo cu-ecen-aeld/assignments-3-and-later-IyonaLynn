@@ -223,12 +223,17 @@ void *connection_handler(void *arg) {
 								// Send response after seeking
 								char send_buf[BUF_SIZE];
 								ssize_t bytes_read;
-								while ((bytes_read = read(fd, send_buf, BUF_SIZE)) > 0) {
-								    if (send(client_fd, send_buf, bytes_read, 0) == -1) {
-									syslog(LOG_ERR, "Send failed: %s", strerror(errno));
-									break;
-								    }
+							while ((bytes_read = read(fd, send_buf, BUF_SIZE)) > 0) {
+							    ssize_t total_sent = 0;
+							    while (total_sent < bytes_read) {
+								ssize_t sent_now = send(client_fd, send_buf + total_sent, bytes_read - total_sent, 0);
+								if (sent_now == -1) {
+								    syslog(LOG_ERR, "Send failed: %s", strerror(errno));
+								    break;
 								}
+								total_sent += sent_now;
+							    }
+							}
 							close(fd);
 						} else {
 							syslog(LOG_ERR, "Failed to open data file for ioctl: %s", strerror(errno));
@@ -252,9 +257,14 @@ void *connection_handler(void *arg) {
 						char send_buf[BUF_SIZE];
 						ssize_t bytes_read;
 						while ((bytes_read = read(fd, send_buf, BUF_SIZE)) > 0) {
-						    if (send(client_fd, send_buf, bytes_read, 0) == -1) {
-							syslog(LOG_ERR, "Send failed: %s", strerror(errno));
-							break;
+						    ssize_t total_sent = 0;
+						    while (total_sent < bytes_read) {
+							ssize_t sent_now = send(client_fd, send_buf + total_sent, bytes_read - total_sent, 0);
+							if (sent_now == -1) {
+							    syslog(LOG_ERR, "Send failed: %s", strerror(errno));
+							    break;
+							}
+							total_sent += sent_now;
 						    }
 						}
 						close(fd);
