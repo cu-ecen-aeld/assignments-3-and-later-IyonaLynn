@@ -224,19 +224,11 @@ void *connection_handler(void *arg) {
 								char send_buf[BUF_SIZE];
 								ssize_t bytes_read;
 								while ((bytes_read = read(fd, send_buf, BUF_SIZE)) > 0) {
-								    // Trim trailing newline if it exists
-									if (bytes_read == 1 && send_buf[0] == '\n') {
-									    continue; // Skip sending single newline buffer
-									}
-									if (bytes_read == 0) {
-									    continue; // Avoid sending empty buffer
-									}
-									if (send(client_fd, send_buf, bytes_read, 0) == -1) {
-									syslog(LOG_ERR, "Send failed (IOCTL response): %s", strerror(errno));
+								    if (send(client_fd, send_buf, bytes_read, 0) == -1) {
+									syslog(LOG_ERR, "Send failed: %s", strerror(errno));
 									break;
 								    }
 								}
-							}
 							close(fd);
 						} else {
 							syslog(LOG_ERR, "Failed to open data file for ioctl: %s", strerror(errno));
@@ -260,14 +252,7 @@ void *connection_handler(void *arg) {
 						char send_buf[BUF_SIZE];
 						ssize_t bytes_read;
 						while ((bytes_read = read(fd, send_buf, BUF_SIZE)) > 0) {
-						    // Trim trailing newline if present
-							if (bytes_read == 1 && send_buf[0] == '\n') {
-							    continue; // Skip sending single newline buffer
-							}
-							if (bytes_read == 0) {
-							    continue; // Avoid sending empty buffer
-							}
-							if (send(client_fd, send_buf, bytes_read, 0) == -1) {
+						    if (send(client_fd, send_buf, bytes_read, 0) == -1) {
 							syslog(LOG_ERR, "Send failed: %s", strerror(errno));
 							break;
 						    }
