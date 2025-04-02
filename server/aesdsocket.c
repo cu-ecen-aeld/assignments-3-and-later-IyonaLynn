@@ -40,6 +40,8 @@
 #include <pthread.h>
 #include <time.h>  // Needed for time functions
 #include "queue.h"
+#include <sys/ioctl.h>
+#include "../aesd-char-driver/aesd_ioctl.h"
 
 #define PORT "9000"    // Port to listen on
 #define BACKLOG 10     // Max pending connections
@@ -48,6 +50,8 @@
 
 /* Build switch for AESD char device */
 #define USE_AESD_CHAR_DEVICE 1
+
+#define IOCTL_CMD_PREFIX "AESDCHAR_IOCSEEKTO:"
 
 #if (USE_AESD_CHAR_DEVICE == 1)
     #define DATA_FILE "/dev/aesdchar"
@@ -88,11 +92,11 @@ void cleanup() {
     closelog();
 }
 
-// Signal handler for SIGINT and SIGTERM
 void signal_handler(int signal) {
     if (signal == SIGINT || signal == SIGTERM) {
         stop_flag = 1;
         syslog(LOG_INFO, "Caught signal, exiting");
+        shutdown(sockfd, SHUT_RDWR); // Force unblock accept
     }
 }
 
@@ -181,70 +185,109 @@ int get_listener_socket(const char *port) {
 
 // Thread function that handles an individual client connection
 void *connection_handler(void *arg) {
-    thread_node_t *node = (thread_node_t *)arg;
-    int client_fd = node->client_fd;
-    char buf[BUF_SIZE];
+	thread_node_t *node = (thread_node_t *)arg;
+	int client_fd = node->client_fd;
+	char buf[BUF_SIZE];
 	char message_buffer[BUF_SIZE];  // Buffer to store complete messages
-    ssize_t bytes_received;
+	ssize_t bytes_received;
 	size_t message_length = 0;
 
 	while ((bytes_received = recv(client_fd, buf, BUF_SIZE, 0)) > 0) {
-	    pthread_mutex_lock(&file_mutex);  // Lock before file operations
+		for (ssize_t i = 0; i < bytes_received; i++) {
+			if (message_length >= BUF_SIZE - 1) {
+			syslog(LOG_ERR, "Message too long, discarding");
+			message_length = 0;
+			continue;
+			}
 
-	    for (ssize_t i = 0; i < bytes_received; i++) {
-	   	    // Prevent buffer overflow
-		    if (message_length < BUF_SIZE - 1) {
-	            message_buffer[message_length++] = buf[i];
-            }
-            // Message complete, write to file
-	        if (buf[i] == '\n') {  // Message complete, write to file
-	            message_buffer[message_length] = '\0';
+			message_buffer[message_length++] = buf[i];
+			// Message complete, write to file
+			if (buf[i] == '\n') {
+				// Make sure the newline is included in the message length
+				message_buffer[message_length] = '\0';  // Properly null-terminate the message
 
-	            FILE *fp = fopen(DATA_FILE, "a+");
-	            if (fp) {
-	                fputs(message_buffer, fp);  // Write only complete messages
-	                fclose(fp);
-	            } else {
-	                syslog(LOG_ERR, "Failed to open data file: %s", strerror(errno));
-	            }
+				// Check for IOCTL command
+				if (strncmp(message_buffer, IOCTL_CMD_PREFIX, strlen(IOCTL_CMD_PREFIX)) == 0) {
+					unsigned int x, y;
+					if (sscanf(message_buffer + strlen(IOCTL_CMD_PREFIX), "%u,%u", &x, &y) == 2) {
+						struct aesd_seekto seekto = {
+							.write_cmd = x,
+							.write_cmd_offset = y
+						};
 
-                // Shift remaining data to the start of the buffer (if any)
-                size_t remaining_length = bytes_received - i - 1;
-                memmove(message_buffer, &buf[i + 1], remaining_length);
-                message_length = remaining_length;  // Adjust length
-            }
-        }
+						int fd = open(DATA_FILE, O_RDWR);
+						if (fd >= 0) {
+							if (ioctl(fd, AESDCHAR_IOCSEEKTO, &seekto) == -1) {
+								syslog(LOG_ERR, "ioctl failed: %s", strerror(errno));
+							} else {
+								// Send response after seeking
+								char send_buf[BUF_SIZE];
+								ssize_t bytes_read;
+								while ((bytes_read = read(fd, send_buf, BUF_SIZE)) > 0) {
+								    ssize_t total_sent = 0;
+								    while (total_sent < bytes_read) {
+									ssize_t sent_now = send(client_fd, send_buf + total_sent, bytes_read - total_sent, 0);
+									if (sent_now == -1) {
+									    syslog(LOG_ERR, "Send failed: %s", strerror(errno));
+									    break;
+									}
+									total_sent += sent_now;
+								    }
+								}
+							}
+							close(fd);
+						} else {
+							syslog(LOG_ERR, "Failed to open data file for ioctl: %s", strerror(errno));
+						}
+					} else {
+						syslog(LOG_ERR, "Malformed AESDCHAR_IOCSEEKTO command");
+					}
+				} else {
+					pthread_mutex_lock(&file_mutex);
+					int fd = open(DATA_FILE, O_RDWR | O_APPEND);
+					if (fd >= 0) {
+						// message_length includes the '\n'
+						if (write(fd, message_buffer, message_length) == -1) {
+							syslog(LOG_ERR, "Write failed: %s", strerror(errno));
+						}
 
-        pthread_mutex_unlock(&file_mutex);  // Unlock after file operations
-    }
+						if (lseek(fd, 0, SEEK_SET) == -1) {
+							syslog(LOG_ERR, "lseek failed: %s", strerror(errno));
+						}
 
-    // Send the contents of the file back to the client
-    pthread_mutex_lock(&file_mutex);  // Lock before reading from file
-    FILE *fp = fopen(DATA_FILE, "r");
-    if (fp) {
-        char send_buf[BUF_SIZE];
-        size_t n;
-        while ((n = fread(send_buf, 1, BUF_SIZE, fp)) > 0) {
-            if (send(client_fd, send_buf, n, 0) == -1) {
-                syslog(LOG_ERR, "Failed to send data to client: %s", strerror(errno));
-                break;
-            }
-        }
-        fclose(fp);
-    } else {
-        syslog(LOG_ERR, "Failed to open data file for reading: %s", strerror(errno));
-    }
-    pthread_mutex_unlock(&file_mutex);  // Unlock after reading
+						char send_buf[BUF_SIZE];
+						ssize_t bytes_read;
+						while ((bytes_read = read(fd, send_buf, BUF_SIZE)) > 0) {
+						    ssize_t total_sent = 0;
+						    while (total_sent < bytes_read) {
+							ssize_t sent_now = send(client_fd, send_buf + total_sent, bytes_read - total_sent, 0);
+							if (sent_now == -1) {
+							    syslog(LOG_ERR, "Send failed: %s", strerror(errno));
+							    break;
+							}
+							total_sent += sent_now;
+						    }
+						}
+						close(fd);
+					} else {
+						syslog(LOG_ERR, "Failed to open data file: %s", strerror(errno));
+					}
+					pthread_mutex_unlock(&file_mutex);
+				}
 
-    if (bytes_received == 0) {
-        syslog(LOG_INFO, "Client disconnected");
-    } else if (bytes_received < 0) {
-        syslog(LOG_ERR, "recv() failed: %s", strerror(errno));
-    }
+				message_length = 0;  // Reset buffer for next message
+			}
+		}
+	}
 
-    close(client_fd);
-    return NULL;
+	if (bytes_received == 0) {
+		syslog(LOG_INFO, "Client disconnected");
+	} else if (bytes_received < 0) {
+		syslog(LOG_ERR, "recv() failed: %s", strerror(errno));
+	}
 
+	close(client_fd);
+	return NULL;
 }
 
 // Timer thread function that appends a timestamp every 10 seconds.
@@ -255,7 +298,16 @@ void *timer_thread(void *arg) {
 
     while (!stop_flag) {
         next_wakeup.tv_sec += TIMESTAMP_INTERVAL;
-        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup, NULL);
+
+        int rc = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup, NULL);
+        if (rc != 0 && rc != EINTR) {
+            syslog(LOG_ERR, "clock_nanosleep error: %s", strerror(rc));
+            break;
+        }
+
+        if (stop_flag) {
+            break;
+        }
 
         #if (USE_AESD_CHAR_DEVICE == 0)  
         time_t now = time(NULL);
